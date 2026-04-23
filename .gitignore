@@ -1,0 +1,49 @@
+# IDE and editor state
+.idea/
+.vs/
+**/.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Visual Studio and compiler intermediates
+*.ipch
+*.obj
+*.o
+*.tlog
+*.lastbuildstate
+*.recipe
+*.idb
+*.pdb
+*.ilk
+*.exp
+
+# Local binaries and libraries
+*.exe
+*.dll
+*.lib
+*.a
+
+# CMake and Ninja outputs
+[Bb]uild/
+**/[Bb]uild/
+out/
+**/out/
+CMakeFiles/
+**/CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+install_manifest.txt
+*.ninja
+.ninja_deps
+.ninja_log
+
+# Android build directories
+packet/build_android_arm32/*
+packet/build_android_arm64/*
+
+# Keep Android delivery artifacts
+!app/libs/**/*.so
+!packet/build_android_arm32/libvoicechanger.so
+!packet/build_android_arm64/libvoicechanger.so
