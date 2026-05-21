@@ -7,10 +7,10 @@
 #include "world/d4c.h"
 #include "world/synthesis.h"
 
-#include <math.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
+#include <stdlib.h>
+#include <math.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -22,21 +22,6 @@
 
 #ifdef __ANDROID__
 #include <jni.h>
-#include <android/log.h>
-#endif
-
-#ifndef VC_ENABLE_LOG
-#define VC_ENABLE_LOG 1
-#endif
-
-#if VC_ENABLE_LOG
-#ifdef __ANDROID__
-#define VC_LOG(fmt, ...) __android_log_print(ANDROID_LOG_INFO, "VoiceChanger", fmt, ##__VA_ARGS__)
-#else
-#define VC_LOG(fmt, ...) printf("[VoiceChanger] " fmt "\n", ##__VA_ARGS__)
-#endif
-#else
-#define VC_LOG(fmt, ...) ((void)0)
 #endif
 
 #define VC_OVERLAP_SAMPLES_MAX  ((VC_MAX_SAMPLE_RATE * VC_OVERLAP_MS + 500) / 1000)
@@ -114,8 +99,6 @@ typedef struct
 static VoiceChanger g_vc;
 static double g_default_pitch = 1.0;
 static double g_default_formant = 1.0;
-static int g_process_log_count = 0;
-static int g_world_log_count = 0;
 
 static inline double soft_clip(double x)
 {
@@ -379,8 +362,6 @@ static void* world_thread(void* arg)
     {
         double local_pitch;
         double local_formant;
-        int input_size_after_pop;
-        int output_size_after_push;
 
 #ifdef _WIN32
         EnterCriticalSection(&vc->mutex);
@@ -411,7 +392,6 @@ static void* world_thread(void* arg)
             sizeof(double) * (size_t)vc->overlap_samples);
 
         input_ring_pop(vc, vc->thread_step, vc->step_samples);
-        input_size_after_pop = vc->input_size;
         memcpy(vc->thread_block + vc->overlap_samples, vc->thread_step,
             sizeof(double) * (size_t)vc->step_samples);
 
@@ -436,16 +416,6 @@ static void* world_thread(void* arg)
 
         output_ring_push(vc, vc->thread_out + vc->overlap_samples,
             vc->step_samples);
-        output_size_after_push = vc->output_size;
-
-        g_world_log_count++;
-        if (g_world_log_count == 1 || (g_world_log_count % 50) == 0)
-        {
-            VC_LOG("world process #%d sample_rate=%d step_samples=%d analysis_samples=%d input_size_after_pop=%d output_size_after_push=%d",
-                g_world_log_count, vc->sample_rate, vc->step_samples,
-                vc->analysis_samples, input_size_after_pop,
-                output_size_after_push);
-        }
 
 #ifdef _WIN32
         LeaveCriticalSection(&vc->mutex);
@@ -460,23 +430,14 @@ static void* world_thread(void* arg)
 int vc_init(int sample_rate)
 {
     if (!is_valid_sample_rate(sample_rate))
-    {
-        VC_LOG("vc_init failed invalid sample_rate=%d valid_range=%d-%d",
-            sample_rate, VC_MIN_SAMPLE_RATE, VC_MAX_SAMPLE_RATE);
         return 0;
-    }
 
     if (g_vc.initialized || g_vc.thread_started ||
         g_vc.mutex_initialized || g_vc.cond_initialized)
-    {
-        VC_LOG("vc_init destroying previous instance before reinit");
         vc_destroy();
-    }
 
     VoiceChanger* vc = &g_vc;
     memset(vc, 0, sizeof(*vc));
-    g_process_log_count = 0;
-    g_world_log_count = 0;
 
     vc->sample_rate = sample_rate;
     vc->frame_samples = samples_from_ms(sample_rate, VC_FRAME_MS);
@@ -489,14 +450,7 @@ int vc_init(int sample_rate)
         vc->step_samples <= vc->overlap_samples ||
         vc->step_samples > VC_STEP_SAMPLES_MAX ||
         vc->analysis_samples > VC_ANALYSIS_SAMPLES_MAX)
-    {
-        VC_LOG("vc_init failed capacity sample_rate=%d frame_samples=%d frame_capacity=%d overlap=%d overlap_max=%d step=%d step_max=%d analysis=%d analysis_max=%d",
-            sample_rate, vc->frame_samples, VC_FRAME_SAMPLES,
-            vc->overlap_samples, VC_OVERLAP_SAMPLES_MAX,
-            vc->step_samples, VC_STEP_SAMPLES_MAX,
-            vc->analysis_samples, VC_ANALYSIS_SAMPLES_MAX);
         return 0;
-    }
 
     vc->pitch_scale = g_default_pitch;
     vc->formant_shift = g_default_formant;
@@ -516,8 +470,6 @@ int vc_init(int sample_rate)
 
     if (!alloc_world_buffers(vc))
     {
-        VC_LOG("vc_init failed alloc_world_buffers sample_rate=%d f0_length=%d fft_size=%d bins=%d",
-            sample_rate, vc->f0_length, vc->fft_size, vc->bins);
         free_world_buffers(vc);
         memset(vc, 0, sizeof(*vc));
         return 0;
@@ -567,10 +519,6 @@ int vc_init(int sample_rate)
 #endif
 
     vc->initialized = 1;
-    VC_LOG("vc_init ok sample_rate=%d frame_ms=%d frame_samples=%d frame_capacity=%d overlap_samples=%d step_samples=%d analysis_samples=%d f0_length=%d fft_size=%d",
-        vc->sample_rate, VC_FRAME_MS, vc->frame_samples, VC_FRAME_SAMPLES,
-        vc->overlap_samples, vc->step_samples, vc->analysis_samples,
-        vc->f0_length, vc->fft_size);
     return 1;
 }
 
@@ -604,17 +552,10 @@ PCMFrame10ms vc_process(PCMFrame10ms in)
     VoiceChanger* vc = &g_vc;
     PCMFrame10ms out;
     double out_tmp[VC_FRAME_SAMPLES];
-    const char* output_path = "uninitialized";
-    int input_size_after_push = 0;
-    int output_size_before_read = 0;
-    int output_size_after_read = 0;
 
     memset(&out, 0, sizeof(out));
     if (!vc->initialized)
-    {
-        VC_LOG("vc_process ignored because not initialized");
         return out;
-    }
 
 #ifdef _WIN32
     EnterCriticalSection(&vc->mutex);
@@ -627,7 +568,6 @@ PCMFrame10ms vc_process(PCMFrame10ms in)
         double x = (double)in.data[i] / 32768.0;
         input_ring_push(vc, &x, 1);
     }
-    input_size_after_push = vc->input_size;
 
     if (vc->input_size >= vc->step_samples)
     {
@@ -638,11 +578,9 @@ PCMFrame10ms vc_process(PCMFrame10ms in)
 #endif
     }
 
-    output_size_before_read = vc->output_size;
     if (vc->output_size >= vc->frame_samples)
     {
         output_ring_pop(vc, out_tmp, vc->frame_samples);
-        output_path = "fifo";
 
         for (int i = 0; i < vc->frame_samples; i++)
         {
@@ -660,24 +598,12 @@ PCMFrame10ms vc_process(PCMFrame10ms in)
         {
             memcpy(out.data, vc->last_output_frame,
                 sizeof(int16_t) * (size_t)vc->frame_samples);
-            output_path = "last_output";
         }
         else
         {
             memset(out.data, 0,
                 sizeof(int16_t) * (size_t)vc->frame_samples);
-            output_path = "zero";
         }
-    }
-    output_size_after_read = vc->output_size;
-
-    g_process_log_count++;
-    if (g_process_log_count == 1 || (g_process_log_count % 50) == 0)
-    {
-        VC_LOG("vc_process #%d sample_rate=%d frame_samples=%d input_size=%d output_before=%d output_after=%d has_last=%d path=%s",
-            g_process_log_count, vc->sample_rate, vc->frame_samples,
-            input_size_after_push, output_size_before_read,
-            output_size_after_read, vc->has_last_output_frame, output_path);
     }
 
 #ifdef _WIN32
@@ -692,10 +618,6 @@ PCMFrame10ms vc_process(PCMFrame10ms in)
 void vc_destroy(void)
 {
     VoiceChanger* vc = &g_vc;
-    int was_initialized = vc->initialized;
-
-    VC_LOG("vc_destroy called initialized=%d thread_started=%d input_size=%d output_size=%d",
-        vc->initialized, vc->thread_started, vc->input_size, vc->output_size);
 
     if (vc->thread_started)
     {
@@ -730,8 +652,6 @@ void vc_destroy(void)
 
     free_world_buffers(vc);
     memset(vc, 0, sizeof(*vc));
-    if (was_initialized)
-        VC_LOG("vc_destroy done");
 }
 
 #ifdef __ANDROID__
@@ -763,19 +683,11 @@ Java_com_banya_anona_ipc_utils_VoiceChangerNative_vcProcess(
     (void)clazz;
 
     if (input == NULL || !g_vc.initialized)
-    {
-        VC_LOG("JNI vcProcess rejected input_null=%d initialized=%d",
-            input == NULL, g_vc.initialized);
         return NULL;
-    }
 
     jsize len = (*env)->GetArrayLength(env, input);
     if (len != g_vc.frame_samples)
-    {
-        VC_LOG("JNI vcProcess len mismatch actual=%d expected=%d sample_rate=%d frame_ms=%d",
-            (int)len, g_vc.frame_samples, g_vc.sample_rate, VC_FRAME_MS);
         return NULL;
-    }
 
     PCMFrame10ms in_frame;
     memset(&in_frame, 0, sizeof(in_frame));

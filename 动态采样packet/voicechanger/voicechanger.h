@@ -10,7 +10,7 @@ extern "C" {
 #define VC_MIN_SAMPLE_RATE 8000
 #define VC_MAX_SAMPLE_RATE 192000
 
-#define VC_FRAME_MS 20
+#define VC_FRAME_MS 10
 #define VC_OVERLAP_MS 20
 #define VC_STEP_MS 250
 

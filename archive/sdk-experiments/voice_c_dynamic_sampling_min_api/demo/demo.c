@@ -56,9 +56,24 @@ static int run_case(int sample_rate, int frames)
     return 1;
 }
 
+static void run_uninitialized_case(void)
+{
+    PCMFrame10ms input;
+    PCMFrame10ms output;
+
+    memset(&input, 0, sizeof(input));
+    memset(&output, 0, sizeof(output));
+
+    printf("\n=== uninitialized vc_process log check ===\n");
+    output = vc_process(input);
+    printf("uninitialized output first_out=%d\n", output.data[0]);
+}
+
 int main(void)
 {
     printf("Dynamic sampling minimal API demo start\n");
+
+    run_uninitialized_case();
 
     if (!run_case(44100, 80))
         return 1;
