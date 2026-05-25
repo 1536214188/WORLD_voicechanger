@@ -20,7 +20,6 @@ extern "C" {
 typedef struct
 {
     int16_t data[VC_FRAME_SAMPLES];
-    int samples;
 } PCMFrame10ms;
 
 #ifdef _WIN32

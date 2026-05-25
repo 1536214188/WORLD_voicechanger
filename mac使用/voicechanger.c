@@ -117,16 +117,6 @@ static double g_default_formant = 1.0;
 static int g_process_log_count = 0;
 static int g_world_log_count = 0;
 
-typedef struct
-{
-    int first;
-    int mid;
-    int last;
-    int min;
-    int max;
-    double rms;
-} PcmSummary;
-
 static inline double soft_clip(double x)
 {
     if (x > 1.25) x = 1.25;
@@ -148,61 +138,6 @@ static int is_valid_sample_rate(int sample_rate)
 {
     return sample_rate >= VC_MIN_SAMPLE_RATE &&
         sample_rate <= VC_MAX_SAMPLE_RATE;
-}
-
-static PcmSummary summarize_pcm(const int16_t* data, int samples)
-{
-    PcmSummary s;
-    double sum_sq = 0.0;
-
-    memset(&s, 0, sizeof(s));
-    if (data == NULL || samples <= 0)
-        return s;
-
-    s.first = data[0];
-    s.mid = data[samples / 2];
-    s.last = data[samples - 1];
-    s.min = data[0];
-    s.max = data[0];
-
-    for (int i = 0; i < samples; i++)
-    {
-        int v = data[i];
-        if (v < s.min) s.min = v;
-        if (v > s.max) s.max = v;
-        sum_sq += (double)v * (double)v;
-    }
-
-    s.rms = sqrt(sum_sq / (double)samples);
-    return s;
-}
-
-static void summarize_pcm_diff(const int16_t* a, const int16_t* b,
-    int samples, double* diff_avg, int* same_count)
-{
-    double sum_abs = 0.0;
-    int same = 0;
-
-    if (diff_avg)
-        *diff_avg = 0.0;
-    if (same_count)
-        *same_count = 0;
-
-    if (a == NULL || b == NULL || samples <= 0)
-        return;
-
-    for (int i = 0; i < samples; i++)
-    {
-        int diff = (int)a[i] - (int)b[i];
-        if (diff < 0) diff = -diff;
-        if (diff == 0) same++;
-        sum_abs += (double)diff;
-    }
-
-    if (diff_avg)
-        *diff_avg = sum_abs / (double)samples;
-    if (same_count)
-        *same_count = same;
 }
 
 static void ring_reset_input(VoiceChanger* vc)
@@ -670,7 +605,6 @@ PCMFrame10ms vc_process(PCMFrame10ms in)
     PCMFrame10ms out;
     double out_tmp[VC_FRAME_SAMPLES];
     const char* output_path = "uninitialized";
-    int block_samples = in.samples;
     int input_size_after_push = 0;
     int output_size_before_read = 0;
     int output_size_after_read = 0;
@@ -682,21 +616,13 @@ PCMFrame10ms vc_process(PCMFrame10ms in)
         return out;
     }
 
-    if (block_samples <= 0 || block_samples > VC_FRAME_SAMPLES)
-    {
-        VC_LOG("vc_process invalid samples=%d capacity=%d",
-            block_samples, VC_FRAME_SAMPLES);
-        return out;
-    }
-    out.samples = block_samples;
-
 #ifdef _WIN32
     EnterCriticalSection(&vc->mutex);
 #else
     pthread_mutex_lock(&vc->mutex);
 #endif
 
-    for (int i = 0; i < block_samples; i++)
+    for (int i = 0; i < vc->frame_samples; i++)
     {
         double x = (double)in.data[i] / 32768.0;
         input_ring_push(vc, &x, 1);
@@ -713,12 +639,12 @@ PCMFrame10ms vc_process(PCMFrame10ms in)
     }
 
     output_size_before_read = vc->output_size;
-    if (vc->output_size >= block_samples)
+    if (vc->output_size >= vc->frame_samples)
     {
-        output_ring_pop(vc, out_tmp, block_samples);
+        output_ring_pop(vc, out_tmp, vc->frame_samples);
         output_path = "fifo";
 
-        for (int i = 0; i < block_samples; i++)
+        for (int i = 0; i < vc->frame_samples; i++)
         {
             double v = out_tmp[i] * 28000.0;
             if (v > 32767.0) v = 32767.0;
@@ -733,13 +659,13 @@ PCMFrame10ms vc_process(PCMFrame10ms in)
         if (vc->has_last_output_frame)
         {
             memcpy(out.data, vc->last_output_frame,
-                sizeof(int16_t) * (size_t)block_samples);
+                sizeof(int16_t) * (size_t)vc->frame_samples);
             output_path = "last_output";
         }
         else
         {
             memset(out.data, 0,
-                sizeof(int16_t) * (size_t)block_samples);
+                sizeof(int16_t) * (size_t)vc->frame_samples);
             output_path = "zero";
         }
     }
@@ -748,25 +674,10 @@ PCMFrame10ms vc_process(PCMFrame10ms in)
     g_process_log_count++;
     if (g_process_log_count == 1 || (g_process_log_count % 50) == 0)
     {
-        PcmSummary input_summary = summarize_pcm(in.data, block_samples);
-        PcmSummary output_summary = summarize_pcm(out.data, block_samples);
-        double diff_avg = 0.0;
-        int same_count = 0;
-
-        summarize_pcm_diff(in.data, out.data, block_samples,
-            &diff_avg, &same_count);
-
-        VC_LOG("vc_process #%d sample_rate=%d block_samples=%d frame_hint=%d input_size=%d output_before=%d output_after=%d has_last=%d path=%s",
-            g_process_log_count, vc->sample_rate, block_samples, vc->frame_samples,
+        VC_LOG("vc_process #%d sample_rate=%d frame_samples=%d input_size=%d output_before=%d output_after=%d has_last=%d path=%s",
+            g_process_log_count, vc->sample_rate, vc->frame_samples,
             input_size_after_push, output_size_before_read,
             output_size_after_read, vc->has_last_output_frame, output_path);
-        VC_LOG("vc_process #%d input first=%d mid=%d last=%d min=%d max=%d input_rms=%.2f output first=%d mid=%d last=%d min=%d max=%d output_rms=%.2f diff_avg=%.2f same_count=%d/%d",
-            g_process_log_count,
-            input_summary.first, input_summary.mid, input_summary.last,
-            input_summary.min, input_summary.max, input_summary.rms,
-            output_summary.first, output_summary.mid, output_summary.last,
-            output_summary.min, output_summary.max, output_summary.rms,
-            diff_avg, same_count, block_samples);
     }
 
 #ifdef _WIN32
@@ -859,26 +770,25 @@ Java_com_banya_anona_ipc_utils_VoiceChangerNative_vcProcess(
     }
 
     jsize len = (*env)->GetArrayLength(env, input);
-    if (len <= 0 || len > VC_FRAME_SAMPLES)
+    if (len != g_vc.frame_samples)
     {
-        VC_LOG("JNI vcProcess invalid len actual=%d capacity=%d sample_rate=%d",
-            (int)len, VC_FRAME_SAMPLES, g_vc.sample_rate);
+        VC_LOG("JNI vcProcess len mismatch actual=%d expected=%d sample_rate=%d frame_ms=%d",
+            (int)len, g_vc.frame_samples, g_vc.sample_rate, VC_FRAME_MS);
         return NULL;
     }
 
     PCMFrame10ms in_frame;
     memset(&in_frame, 0, sizeof(in_frame));
-    in_frame.samples = (int)len;
     (*env)->GetShortArrayRegion(env, input, 0, len,
         (jshort*)in_frame.data);
 
     PCMFrame10ms out_frame = vc_process(in_frame);
 
-    jshortArray result = (*env)->NewShortArray(env, out_frame.samples);
+    jshortArray result = (*env)->NewShortArray(env, len);
     if (result == NULL)
         return NULL;
 
-    (*env)->SetShortArrayRegion(env, result, 0, out_frame.samples,
+    (*env)->SetShortArrayRegion(env, result, 0, len,
         (jshort*)out_frame.data);
 
     return result;
